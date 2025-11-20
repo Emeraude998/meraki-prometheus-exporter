@@ -6,7 +6,7 @@ import configargparse
 import meraki
 
 
-def get_devices(devices, dashboard, organization_id):
+def get_devices_and_statuses(devices_and_statuses, dashboard, organization_id):
     """
     Fetch all devices in the organization.
     
@@ -16,48 +16,48 @@ def get_devices(devices, dashboard, organization_id):
         organization_id: ID of the organization to fetch devices for
     
     Returns:
-        List of devices in the organization
+        List of devices and their statuses in the organization
     """
-    devices.extend(dashboard.organizations.getOrganizationDevicesAvailabilities(
+    devices_and_statuses.extend(dashboard.organizations.getOrganizationDevicesAvailabilities(
         organizationId=organization_id,
         total_pages="all"))
-    print('Got', len(devices), 'Devices')
+    print('Got', len(devices_and_statuses), 'Devices')
 
-def get_device_statuses(devices_statuses, dashboard, organization_id):
+def get_firewall_latency(firewall_latencies, dashboard, organization_id):
     """
     Fetch all device statuses in the organization.
     
     Args:
-        devices_statuses: List to append device status data to
+        firewall_latencies: List to append device status data to
         dashboard: Meraki DashboardAPI instance
         organization_id: ID of the organization to fetch device statuses for
     
     Returns:
         List of device statuses in the organization
     """
-    devices_statuses.extend(dashboard.organizations.getOrganizationDevicesUplinksLossAndLatency(
+    firewall_latencies.extend(dashboard.organizations.getOrganizationDevicesUplinksLossAndLatency(
         organizationId=organization_id,
         ip='8.8.8.8',
         timespan="120",
         total_pages="all"))
-    print('Got ', len(devices_statuses), 'Device Statuses')
+    print('Found latency information on', len(firewall_latencies), 'firewalls WAN Uplinks')
 
-def get_uplink_statuses(uplink_statuses, dashboard, organization_id):
+def get_firewall_uplink_statuses(firewall_uplink_statuses, dashboard, organization_id):
     """
     Fetch all uplink statuses in the organization.
     
     Args:
-        uplink_statuses: List to append uplink status data to
+        firewall_uplink_statuses: List to append uplink status data to
         dashboard: Meraki DashboardAPI instance
         organization_id: ID of the organization to fetch uplink statuses for
     
     Returns:
-        List of uplink statuses in the organization
+        List of firewall uplink statuses in the organization
     """
-    uplink_statuses.extend(dashboard.appliance.getOrganizationApplianceUplinkStatuses(
+    firewall_uplink_statuses.extend(dashboard.appliance.getOrganizationApplianceUplinkStatuses(
         organizationId=organization_id,
         total_pages="all"))
-    print('Got ', len(uplink_statuses), 'Uplink Statuses')
+    print('Got', len(firewall_uplink_statuses), 'firewall WAN Uplink Statuses')
 
 def is_uplink_port(port_id, serial=None, port_tags_map=None):
     """
@@ -114,7 +114,7 @@ def get_vpn_statuses(vpn_statuses, dashboard, organization_id):
     vpn_statuses.extend(dashboard.appliance.getOrganizationApplianceVpnStatuses(
         organizationId=organization_id,
         total_pages="all"))
-    print('Got ', len(vpn_statuses), 'VPN Statuses')
+    print('Got', len(vpn_statuses), 'VPN Statuses')
 
 def get_organization(org_data, dashboard, organization_id):
     """
@@ -179,7 +179,7 @@ def get_switch_ports_usage(switch_ports_usage, dashboard, organization_id):
         if isinstance(response, dict) and 'items' in response:
             # Process all devices - we'll filter ports later
             all_devices = response['items']
-            print(f"   Raw response: {len(all_devices)} devices returned")
+            print(f"Found {len(all_devices)} switch devices")
 
             for device in all_devices:
                 # Check if device has any port data
@@ -190,8 +190,7 @@ def get_switch_ports_usage(switch_ports_usage, dashboard, organization_id):
                     if has_data:
                         switch_ports_usage.append(device)
 
-            print('Got', len(switch_ports_usage), 'devices with port data')
-            print('Meta info:', response.get('meta'))
+            print('Got', len(switch_ports_usage), 'switches with port activity')
         else:
             switch_ports_usage.extend(response)
             print('Got', len(response), 'records')
@@ -237,6 +236,8 @@ def get_switch_ports_tags_map(port_tags_map, dashboard, organization_id):
             tags = port.get('tags', [])
             if tags:
                 port_tags_map[serial][port_id] = tags
+    
+    print('Found', sum(len(ports) for ports in port_tags_map.values()), 'tagged ports')
 
 def get_switch_ports_topology_discovery(port_discovery_map, dashboard, organization_id):
     """
@@ -255,9 +256,7 @@ def get_switch_ports_topology_discovery(port_discovery_map, dashboard, organizat
         total_pages="all"
     )
     
-    # Response is a dict with 'items' and 'meta' when using total_pages="all"
-    print('Got', response['meta']['counts']['items']['total'], 'topology discovery records')
-    
+    # Response is a dict with 'items' and 'meta' when using total_pages="all"    
     if isinstance(response, dict) and 'items' in response:
         topology_data = response['items']
     else:
@@ -288,6 +287,8 @@ def get_switch_ports_topology_discovery(port_discovery_map, dashboard, organizat
                         'device_type': device_type,
                         'device_name': extract_device_name(lldp_parsed.get('system_name', 'N/A')),
                     }
+    
+    print('Found', sum(len(ports) for ports in port_discovery_map.values()), 'switch ports connected to Meraki devices')
 
 def parse_discovery_info(info_list):
     """
@@ -403,6 +404,8 @@ def get_floor_name_per_device(devices_floor_info, dashboard, organization_id):
             serial = device.get('serial')
             if serial:
                 devices_floor_info[serial] = floor_name
+    
+    print('Found', len(devices_floor_info), 'devices associated to a floor name')
 
 def extract_device_name(system_name):
     """
@@ -433,9 +436,9 @@ def get_usage(dashboard, organization_id):
         Dictionary containing combined Meraki device data
     """
     # Shared data containers for threaded collection
-    devices = []
-    devices_statuses = []
-    uplink_statuses = []
+    devices_and_statuses = []
+    firewall_latencies = []
+    firewall_uplink_statuses = []
     vpn_statuses = []
     org_data = {}
     switch_ports_usage = []
@@ -445,9 +448,9 @@ def get_usage(dashboard, organization_id):
 
     # Define all data collection tasks
     threads = [
-        threading.Thread(target=get_devices, args=(devices, dashboard, organization_id)),
-        threading.Thread(target=get_device_statuses, args=(devices_statuses, dashboard, organization_id)),
-        threading.Thread(target=get_uplink_statuses, args=(uplink_statuses, dashboard, organization_id)),
+        threading.Thread(target=get_devices_and_statuses, args=(devices_and_statuses, dashboard, organization_id)),
+        threading.Thread(target=get_firewall_latency, args=(firewall_latencies, dashboard, organization_id)),
+        threading.Thread(target=get_firewall_uplink_statuses, args=(firewall_uplink_statuses, dashboard, organization_id)),
         threading.Thread(target=get_organization, args=(org_data, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_usage, args=(switch_ports_usage, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_tags_map, args=(port_tags_map, dashboard, organization_id)),
@@ -476,11 +479,11 @@ def get_usage(dashboard, organization_id):
     except Exception:
         networks_map = {}
 
-    print('Combining collected data\n')
+    print('-- Combining collected data --\n')
 
     the_list = {}
     # Normalize device fields coming from different Meraki endpoints
-    for device in devices:
+    for device in devices_and_statuses:
         serial = device.get('serial')
         if not serial:
             # Skip devices without serial (some API responses may include non-serial entries)
@@ -537,7 +540,7 @@ def get_usage(dashboard, organization_id):
         if 'usingCellularFailover' in device:
             the_list[serial]['usingCellularFailover'] = device.get('usingCellularFailover')
 
-    for device in devices_statuses:
+    for device in firewall_latencies:
         try:
             the_list[device['serial']]  # should give me KeyError if devices was not picked up by previous search.
         except KeyError:
@@ -546,7 +549,7 @@ def get_usage(dashboard, organization_id):
         the_list[device['serial']]['latencyMs'] = device['timeSeries'][-1]['latencyMs']
         the_list[device['serial']]['lossPercent'] = device['timeSeries'][-1]['lossPercent']
 
-    for device in uplink_statuses:
+    for device in firewall_uplink_statuses:
         try:
             the_list[device['serial']]  # should give me KeyError if devices was not picked up by previous search.
         except KeyError:
@@ -690,7 +693,7 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
             return()
 
         self._set_headers()
-        dashboard = meraki.DashboardAPI(API_KEY, output_log=False, print_console=True, maximum_retries=20, caller="promethusExporter Emeraude998")
+        dashboard = meraki.DashboardAPI(API_KEY, output_log=False, print_console=False, maximum_retries=20, caller="promethusExporter Emeraude998")
 
         if "/organizations" in self.path:   # Generating list of avialable organizations for API keys.
             org_list = list()
@@ -709,7 +712,7 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
         host_stats = get_usage(dashboard, organization_id)
         print("Reporting on:", len(host_stats), "hosts")
 
-        uplink_statuses = {'active': 0, 'ready': 1, 'connecting': 2, 'not connected': 3, 'failed': 4}
+        firewall_uplink_statuses = {'active': 0, 'ready': 1, 'connecting': 2, 'not connected': 3, 'failed': 4}
 
         response = """
 # HELP meraki_device_latency The latency of the Meraki device in milliseconds
@@ -804,7 +807,7 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
                 pass
             if 'uplinks' in host_stats[host]:
                 for uplink in host_stats[host]['uplinks'].keys():
-                    response += 'meraki_device_uplink_status' + target + ',uplink="' + uplink + '"} ' + str(uplink_statuses[host_stats[host]['uplinks'][uplink]]) + '\n'
+                    response += 'meraki_device_uplink_status' + target + ',uplink="' + uplink + '"} ' + str(firewall_uplink_statuses[host_stats[host]['uplinks'][uplink]]) + '\n'
             if 'vpnMode' in host_stats[host]:
                 response += 'meraki_vpn_mode' + target + '} ' + ('1' if host_stats[host]['vpnMode'] == 'hub' else '0') + '\n'
             if 'exportedSubnets' in host_stats[host]:
