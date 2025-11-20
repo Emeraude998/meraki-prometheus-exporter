@@ -14,5 +14,5 @@ USER app
 
 # Add and run python app
 COPY meraki-api-exporter.py .
-ENTRYPOINT ["python", "meraki-api-exporter.py"]
+ENTRYPOINT ["python", "-u", "meraki-api-exporter.py"]
 CMD []
