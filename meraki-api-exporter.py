@@ -354,6 +354,56 @@ def is_meraki_device(cdp_list, lldp_list):
     
     return (False, None, None)
 
+def get_floor_name_per_device(devices_floor_info, dashboard, organization_id):
+    """
+    Extract floor name from floor information.
+    
+    Args:
+        floor_info: The floor information dict
+        dashboard: Meraki DashboardAPI instance
+        organization_id: ID of the organization (for logging)
+        
+    Returns:
+        Dict: {serial: floor_name}
+    """
+    
+    # Fetch all networks in the organization
+    response = dashboard.organizations.getOrganizationNetworks(
+        organizationId=organization_id,
+        total_pages="all")
+        
+    if isinstance(response, dict) and 'items' in response:
+        network_list = response['items']
+    else:
+        network_list = response
+        
+    print('Got', len(network_list), 'networks to check for floor plans')
+
+    floor_response = []
+    # Fetch floor plans for each network
+    for network in network_list:
+        network_id = network.get('id')
+        
+        if not network_id:
+            continue
+        
+        floor_response.extend(dashboard.networks.getNetworkFloorPlans(networkId=network_id))
+        
+    if isinstance(floor_response, dict) and 'items' in floor_response:
+        floor_list = floor_response['items']
+    else:
+        floor_list = floor_response
+
+    # Process floor plans to map device serials and names to floor names
+    for floor in floor_list:
+        floor_name = floor.get('name', 'N/A')
+        devices_on_floor = floor.get('devices', [])
+        
+        for device in devices_on_floor:
+            serial = device.get('serial')
+            if serial:
+                devices_floor_info[serial] = floor_name
+
 def extract_device_name(system_name):
     """
     Extract a friendly device name from system name string.
@@ -391,6 +441,7 @@ def get_usage(dashboard, organization_id):
     switch_ports_usage = []
     port_tags_map = {}
     port_discovery_map = {}
+    devices_floor_info = {}
 
     # Define all data collection tasks
     threads = [
@@ -401,6 +452,7 @@ def get_usage(dashboard, organization_id):
         threading.Thread(target=get_switch_ports_usage, args=(switch_ports_usage, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_tags_map, args=(port_tags_map, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_topology_discovery, args=(port_discovery_map, dashboard, organization_id)),
+        threading.Thread(target=get_floor_name_per_device, args=(devices_floor_info, dashboard, organization_id)),
     ]
 
     # Add VPN collection thread if enabled
@@ -465,6 +517,16 @@ def get_usage(dashboard, organization_id):
         status = device.get('status')
         if status:
             the_list[serial]['status'] = status
+        
+        # Product Type
+        product_type = device.get('productType')
+        if product_type:
+            the_list[serial]['productType'] = product_type
+        
+        # Floor name
+        floor_name = devices_floor_info.get(serial)
+        if floor_name:
+            the_list[serial]['floor_name'] = floor_name
 
         # IP-related fields: only set if present in the device object
         for ip_key in ('wan1Ip', 'wan2Ip', 'lanIp', 'publicIp'):
@@ -723,9 +785,8 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 
             name_label = hs.get('name') or hs.get('mac') or host
             network_name_label = hs.get('networkName') if isinstance(hs.get('networkName'), str) else (hs.get('networkId') if hs.get('networkId') else 'None')
-            orgname_label = hs.get('orgName', 'None')
 
-            target = '{name="' + _esc(name_label) + '",office="' + _esc(network_name_label) + '"'
+            target = '{name="' + _esc(name_label) + '",office="' + _esc(network_name_label) + '",floor="' + _esc(hs.get('floor_name')) + '",product_type="' + _esc(hs.get('productType')) + '"'
             try:
                 if host_stats[host]['latencyMs'] is not None:
                     response += 'meraki_device_latency' + target + '} ' + str(host_stats[host]['latencyMs']/1000) + '\n'
@@ -760,7 +821,7 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
             if 'switchPortUsage' in host_stats[host]:
                 for port_id, usage_data in host_stats[host]['switchPortUsage'].items():
                     if 'ap_device_name' in usage_data:
-                        ap_target = '{name="' + _esc(usage_data['ap_device_name']) + '",office="' + _esc(network_name_label) + '"}'
+                        ap_target = '{name="' + _esc(usage_data['ap_device_name']) + '",office="' + _esc(network_name_label) + '",floor="' + _esc(hs.get('floor_name')) + '",product_type="wireless"'
                         if 'UsageTotalBytes' in usage_data:
                             response += 'meraki_wireless_usage_total_bytes' + ap_target + '} ' + str(usage_data['UsageTotalBytes']*1024) + '\n'
                         if 'UsageUpstreamBytes' in usage_data:
