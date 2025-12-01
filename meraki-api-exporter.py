@@ -102,10 +102,14 @@ def is_uplink_port(port_id, serial=None, port_tags_map=None, port_discovery_map=
     
     # Priority logic:
 <<<<<<< HEAD
+<<<<<<< HEAD
     # 1. If discovery shows MS/MX device connected (means the port status is connected), return TRUE (highest priority)
 =======
     # 1. If discovery shows MS/MX device connected, return TRUE (highest priority)
 >>>>>>> 31435af (Enhance uplink port identification logic and add switch port status fetching functionality)
+=======
+    # 1. If discovery shows MS/MX device connected (means the port status is connected), return TRUE (highest priority)
+>>>>>>> 71fa646 (Clarify comments and update type hint for port statuses in uplink port logic)
     if is_discovered_uplink:
         return True
     
@@ -238,6 +242,7 @@ def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
     
     Args:
         port_statuses_map (dict[str, dict[str, str]]): Dict to update with port connectivity status
+<<<<<<< HEAD
 =======
 def get_switch_ports_status_map(ports_statuses_map, dashboard, organization_id):
 =======
@@ -248,6 +253,8 @@ def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
     Args:
         port_statuses_map (dict[str, dict[str, list[str]]]): Dict to update with port connectivity status
 >>>>>>> 31435af (Enhance uplink port identification logic and add switch port status fetching functionality)
+=======
+>>>>>>> 71fa646 (Clarify comments and update type hint for port statuses in uplink port logic)
         dashboard (meraki.DashboardAPI): Meraki API client instance
         organization_id (str): ID of the organization to fetch port statuses for
         
