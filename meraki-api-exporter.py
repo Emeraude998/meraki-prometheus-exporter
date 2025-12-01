@@ -232,6 +232,7 @@ def get_switch_ports_usage(switch_ports_usage, dashboard, organization_id):
         raise
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
     """Fetch port status for all switches in the organization.
     
@@ -239,6 +240,9 @@ def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
         port_statuses_map (dict[str, dict[str, str]]): Dict to update with port connectivity status
 =======
 def get_switch_ports_status_map(ports_statuses_map, dashboard, organization_id):
+=======
+def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
+>>>>>>> 8a4bdf7 (Fix variable name inconsistencies in switch port status functions)
     """Fetch port status for all switches in the organization.
     
     Args:
@@ -263,26 +267,35 @@ def get_switch_ports_status_map(ports_statuses_map, dashboard, organization_id):
             print(f"Found {len(switches_statuses)} switch devices")
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         # Build the port statuses map
 =======
         # Build the port tags map
 >>>>>>> 31435af (Enhance uplink port identification logic and add switch port status fetching functionality)
+=======
+        # Build the port statuses map
+>>>>>>> 8a4bdf7 (Fix variable name inconsistencies in switch port status functions)
         for switch in switches_statuses:
             serial = switch.get('serial')
             if not serial:
                 continue
 
 <<<<<<< HEAD
+<<<<<<< HEAD
             port_statuses_map[serial] = {}
 =======
             ports_statuses_map[serial] = {}
 >>>>>>> 31435af (Enhance uplink port identification logic and add switch port status fetching functionality)
+=======
+            port_statuses_map[serial] = {}
+>>>>>>> 8a4bdf7 (Fix variable name inconsistencies in switch port status functions)
             ports = switch.get('ports', [])
 
             for port in ports:
                 port_id = str(port.get('portId', ''))
                 status = port.get('status', '')
                 if status:
+<<<<<<< HEAD
 <<<<<<< HEAD
                     port_statuses_map[serial][port_id] = status
         
@@ -292,6 +305,11 @@ def get_switch_ports_status_map(ports_statuses_map, dashboard, organization_id):
         
         print('Found', sum(len(ports) for ports in ports_statuses_map.values()), 'port statuses')
 >>>>>>> 31435af (Enhance uplink port identification logic and add switch port status fetching functionality)
+=======
+                    port_statuses_map[serial][port_id] = status
+        
+        print('Found', sum(len(ports) for ports in port_statuses_map.values()), 'port statuses')
+>>>>>>> 8a4bdf7 (Fix variable name inconsistencies in switch port status functions)
 
     except Exception as e:
         print(f"Error fetching switch ports statuses: {e}")
@@ -713,10 +731,14 @@ def get_usage(dashboard, organization_id):
     org_data = {}
     switch_ports_usage = []
 <<<<<<< HEAD
+<<<<<<< HEAD
     port_statuses_map = {}
 =======
     ports_statuses_map = {}
 >>>>>>> 31435af (Enhance uplink port identification logic and add switch port status fetching functionality)
+=======
+    port_statuses_map = {}
+>>>>>>> 8a4bdf7 (Fix variable name inconsistencies in switch port status functions)
     port_tags_map = {}
     port_discovery_map = {}
     devices_floor_info = {}
@@ -739,10 +761,14 @@ def get_usage(dashboard, organization_id):
         threading.Thread(target=get_organization, args=(org_data, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_usage, args=(switch_ports_usage, dashboard, organization_id)),
 <<<<<<< HEAD
+<<<<<<< HEAD
         threading.Thread(target=get_switch_ports_status_map, args=(port_statuses_map, dashboard, organization_id)),
 =======
         threading.Thread(target=get_switch_ports_status_map, args=(ports_statuses_map, dashboard, organization_id)),
 >>>>>>> 31435af (Enhance uplink port identification logic and add switch port status fetching functionality)
+=======
+        threading.Thread(target=get_switch_ports_status_map, args=(port_statuses_map, dashboard, organization_id)),
+>>>>>>> 8a4bdf7 (Fix variable name inconsistencies in switch port status functions)
         threading.Thread(target=get_switch_ports_tags_map, args=(port_tags_map, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_topology_discovery, args=(port_discovery_map, dashboard, organization_id)),
         threading.Thread(target=get_floor_name_per_device, args=(devices_floor_info, dashboard, organization_id)),
@@ -884,6 +910,7 @@ def get_usage(dashboard, organization_id):
             # Check if this port is an ap port (topology discovery)
             # or an uplink port (based on tags and / or topology discovery)
 <<<<<<< HEAD
+<<<<<<< HEAD
             is_uplink = is_uplink_port(port_id, serial=device['serial'], port_tags_map=port_tags_map, port_discovery_map=port_discovery_map, port_statuses_map=port_statuses_map)
             is_ap, ap_name = is_ap_device(port_id, serial=device['serial'], port_discovery_map=port_discovery_map)
 
@@ -894,6 +921,12 @@ def get_usage(dashboard, organization_id):
 
              # Skip ports that are neither uplink nor AP ports
 >>>>>>> 31435af (Enhance uplink port identification logic and add switch port status fetching functionality)
+=======
+            is_uplink = is_uplink_port(port_id, serial=device['serial'], port_tags_map=port_tags_map, port_discovery_map=port_discovery_map, port_statuses_map=port_statuses_map)
+            is_ap, ap_name = is_ap_device(port_id, serial=device['serial'], port_discovery_map=port_discovery_map)
+
+            # Skip ports that are neither uplink nor AP ports
+>>>>>>> 8a4bdf7 (Fix variable name inconsistencies in switch port status functions)
             if not is_uplink and not is_ap:
                 continue  # Keep only connected uplink ports or AP ports
 
