@@ -56,23 +56,60 @@ def get_firewall_uplink_statuses(firewall_uplink_statuses, dashboard, organizati
         total_pages="all"))
     print('Got', len(firewall_uplink_statuses), 'firewall WAN Uplink Statuses')
 
-def is_uplink_port(port_id, serial=None, port_tags_map=None):
-    """Identify if a port is an uplink port based on tags only.
+def is_uplink_port(port_id, serial=None, port_tags_map=None, port_discovery_map=None, port_statuses_map=None):
+    """Identify if a port is an uplink port based on tags, topology discovery and port status.
     
     Args:
         port_id (str): The port ID/number
-        serial (str): Device serial number (required for tag lookup)
-        port_tags_map (dict): Dict mapping {serial: {portId: [tags]}} (required)
+        serial (str): Device serial number (required for lookups)
+        port_tags_map (dict): Dict mapping {serial: {portId: [tags]}} (optional)
+        port_discovery_map (dict): Dict mapping {serial: {portId: lldp_info}} (optional)
+        port_statuses_map (dict): Dict mapping {serial: {portId: status}} (optional)
     
     Returns:
-        bool: True if port has 'uplink' tag
+        bool: True if port has 'uplink' tag or connected to MS/MX device and has status connected
     """
+    has_tag_check = port_tags_map is not None
+    has_discovery_check = port_discovery_map is not None
+    has_status_check = port_statuses_map is not None
+    
+    # If neither map is present, return False
+    if not has_tag_check and not has_discovery_check:
+        return False
+    
+    is_tagged_uplink = False
+    is_discovered_uplink = False
+    has_status_connected = False
+    
     # Check if port is tagged with 'uplink'
-    if port_tags_map and serial and serial in port_tags_map:
+    if has_tag_check and serial and serial in port_tags_map:
         port_tags = port_tags_map[serial].get(str(port_id), [])
         if 'uplink' in port_tags:
-            return True
+            is_tagged_uplink = True
+    
+    # Check if port is connected to an MS (switch) or MX (appliance) device
+    if has_discovery_check and serial and serial in port_discovery_map:
+        port_info = port_discovery_map[serial].get(str(port_id), {})
+        device_type = port_info.get('device_type')
+        if device_type in ['MS', 'MX']:
+            is_discovered_uplink = True
 
+    # Additionally check port status if port_statuses_map is provided
+    if has_status_check and serial and serial in port_statuses_map:
+        port_status = port_statuses_map[serial].get(str(port_id), '')
+        if port_status.lower() == 'connected':
+            has_status_connected = True
+    
+    # Priority logic:
+    # 1. If discovery shows MS/MX device connected, return TRUE (highest priority)
+    if is_discovered_uplink:
+        return True
+    
+    # 2. Else if tagged as 'uplink' AND port is physically connected, return TRUE
+    if is_tagged_uplink and has_status_connected:
+        return True
+    
+    # 3. Otherwise return FALSE
     return False
 
 def is_ap_device(port_id, serial=None, port_discovery_map=None):
@@ -188,6 +225,50 @@ def get_switch_ports_usage(switch_ports_usage, dashboard, organization_id):
             print('Got', len(response), 'records')
     except Exception as e:
         print(f"Error fetching switch port usage: {e}")
+        raise
+
+def get_switch_ports_status_map(ports_statuses_map, dashboard, organization_id):
+    """Fetch port status for all switches in the organization.
+    
+    Args:
+        port_statuses_map (dict[str, dict[str, list[str]]]): Dict to update with port connectivity status
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization to fetch port statuses for
+        
+    Returns:
+        None: Modifies dict in place
+    """
+
+    try:
+        response = dashboard.switch.getOrganizationSwitchPortsStatusesBySwitch(
+            organizationId=organization_id,
+            total_pages="all"
+        )
+
+        if isinstance(response, dict) and 'items' in response:
+            # Process all devices - we'll filter ports later
+            switches_statuses = response['items']
+            print(f"Found {len(switches_statuses)} switch devices")
+
+        # Build the port tags map
+        for switch in switches_statuses:
+            serial = switch.get('serial')
+            if not serial:
+                continue
+
+            ports_statuses_map[serial] = {}
+            ports = switch.get('ports', [])
+
+            for port in ports:
+                port_id = str(port.get('portId', ''))
+                status = port.get('status', '')
+                if status:
+                    ports_statuses_map[serial][port_id] = status
+        
+        print('Found', sum(len(ports) for ports in ports_statuses_map.values()), 'port statuses')
+
+    except Exception as e:
+        print(f"Error fetching switch ports statuses: {e}")
         raise
 
 def get_switch_ports_tags_map(port_tags_map, dashboard, organization_id):
@@ -430,6 +511,7 @@ def get_usage(dashboard, organization_id):
     vpn_statuses = []
     org_data = {}
     switch_ports_usage = []
+    ports_statuses_map = {}
     port_tags_map = {}
     port_discovery_map = {}
     devices_floor_info = {}
@@ -441,6 +523,7 @@ def get_usage(dashboard, organization_id):
         threading.Thread(target=get_firewall_uplink_statuses, args=(firewall_uplink_statuses, dashboard, organization_id)),
         threading.Thread(target=get_organization, args=(org_data, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_usage, args=(switch_ports_usage, dashboard, organization_id)),
+        threading.Thread(target=get_switch_ports_status_map, args=(ports_statuses_map, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_tags_map, args=(port_tags_map, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_topology_discovery, args=(port_discovery_map, dashboard, organization_id)),
         threading.Thread(target=get_floor_name_per_device, args=(devices_floor_info, dashboard, organization_id)),
@@ -569,9 +652,14 @@ def get_usage(dashboard, organization_id):
             if not port.get('intervals'):
                 continue
 
-            # Check if this port is an uplink port based on tags
-            if not is_uplink_port(port_id, serial=device['serial'], port_tags_map=port_tags_map) and not is_ap_device(port_id, serial=device['serial'], port_discovery_map=port_discovery_map):
-                continue  # Keep only uplink ports or AP ports
+            # Check if this port is an ap port (topology discovery)
+            # or an uplink port (based on tags and / or topology discovery)
+            is_uplink = is_uplink_port(port_id, serial=device['serial'], port_tags_map=port_tags_map, port_discovery_map=port_discovery_map, port_statuses_map=ports_statuses_map)
+            is_ap, ap_name = is_ap_device(port_id, serial=device['serial'], port_discovery_map=port_discovery_map)
+
+             # Skip ports that are neither uplink nor AP ports
+            if not is_uplink and not is_ap:
+                continue  # Keep only connected uplink ports or AP ports
 
             latest_interval = port['intervals'][-1]  # Get the most recent interval data
 
@@ -593,9 +681,8 @@ def get_usage(dashboard, organization_id):
             the_list[device['serial']]['switchPortUsage'][port_id]['bandwidthUpstreamKbps'] = bandwidth.get('upstream', 0)
             the_list[device['serial']]['switchPortUsage'][port_id]['bandwidthDownstreamKbps'] = bandwidth.get('downstream', 0)
 
-            ap, name = is_ap_device(port_id, serial=device['serial'], port_discovery_map=port_discovery_map)
-            if ap:
-                the_list[device['serial']]['switchPortUsage'][port_id]['ap_device_name'] = name
+            if is_ap:
+                the_list[device['serial']]['switchPortUsage'][port_id]['ap_device_name'] = ap_name
 
     print('Done')
     return the_list
