@@ -365,11 +365,19 @@ def get_wireless_ap_clients(ap_clients_info, dashboard, organization_id):
     """List access point client count at the moment in an organization
     
     Args:
+<<<<<<< HEAD
         ap_clients_info (dict[str, int]): List to append AP client count data to
         dashboard (meraki.DashboardAPI): Meraki API client instance
         organization_id (str): ID of the organization to fetch AP client counts for
     Returns:
         None: Modifies dict in place
+=======
+        ap_clients_info (dict[str, str]): List to append AP client count data to
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization to fetch AP client counts for
+    Returns:
+        None: Modifies list in place
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
     """
     response = dashboard.wireless.getOrganizationWirelessClientsOverviewByDevice(
         organizationId=organization_id,
@@ -378,6 +386,7 @@ def get_wireless_ap_clients(ap_clients_info, dashboard, organization_id):
     
     # Response is a dict with 'items' and 'meta' when using total_pages="all"
     if isinstance(response, dict) and 'items' in response:
+<<<<<<< HEAD
         all_devices = response['items']
     else:
         all_devices = response
@@ -385,11 +394,21 @@ def get_wireless_ap_clients(ap_clients_info, dashboard, organization_id):
     print('Found', sum(device.get('counts', {}).get('byStatus', {}).get('online', 0) for device in all_devices), 'wireless clients')
     
     for device in all_devices:
+=======
+        ap_clients_list = response['items']
+    else:
+        ap_clients_list = response
+    
+    print('Found', sum(device.get('counts', {}).get('byStatus', {}).get('online', 0) for device in ap_clients_list), 'wireless clients')
+    
+    for device in ap_clients_list:
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
         serial = device.get('serial')
         client_count = device.get('counts', {}).get('byStatus', {}).get('online', 0)
         if serial:
             ap_clients_info[serial] = client_count
 
+<<<<<<< HEAD
 def cpu_load_calculator(core_count, load_value):
     """Calculate CPU load percentage based on core count and load average value.
     
@@ -489,6 +508,8 @@ def get_device_memory_usage(device_memory_usage, dashboard, organization_id):
         if serial:
             device_memory_usage[serial] = memory_used_percentage
 
+=======
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
 def parse_discovery_info(info_list):
     """Parse CDP or LLDP information from list of {'name': ..., 'value': ...} dicts
     
@@ -644,8 +665,11 @@ def get_usage(dashboard, organization_id):
     port_discovery_map = {}
     devices_floor_info = {}
     ap_clients_info = {}
+<<<<<<< HEAD
     ap_cpu_loads = {}
     device_memory_usage = {}
+=======
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
 
     # Define all data collection tasks
     threads = [
@@ -659,8 +683,11 @@ def get_usage(dashboard, organization_id):
         threading.Thread(target=get_switch_ports_topology_discovery, args=(port_discovery_map, dashboard, organization_id)),
         threading.Thread(target=get_floor_name_per_device, args=(devices_floor_info, dashboard, organization_id)),
         threading.Thread(target=get_wireless_ap_clients, args=(ap_clients_info, dashboard, organization_id)),
+<<<<<<< HEAD
         threading.Thread(target=get_wireless_ap_cpu_load_history, args=(ap_cpu_loads, dashboard, organization_id)),
         threading.Thread(target=get_device_memory_usage, args=(device_memory_usage, dashboard, organization_id)),
+=======
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
     ]
 
     # Add VPN collection thread if enabled
@@ -823,6 +850,7 @@ def get_usage(dashboard, organization_id):
     for serial, client_count in ap_clients_info.items():
         if serial in the_list:
             the_list[serial]['wirelessClientCount'] = client_count
+<<<<<<< HEAD
             
     # Add wireless AP CPU loads to devices
     for serial, cpu_load in ap_cpu_loads.items():
@@ -833,6 +861,8 @@ def get_usage(dashboard, organization_id):
     for serial, memory_usage in device_memory_usage.items():
         if serial in the_list:
             the_list[serial]['memoryUsedPercent'] = memory_usage
+=======
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
 
     print('Done')
     return the_list
@@ -972,6 +1002,7 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 # UNIT meraki_wireless_bandwidth_sent_kbps kbps
 # HELP meraki_wireless_bandwidth_received_kbps Wireless received bandwidth in kbps
 # TYPE meraki_wireless_bandwidth_received_kbps gauge
+<<<<<<< HEAD
 # UNIT meraki_wireless_bandwidth_received_kbps kbps
 # HELP meraki_wireless_client_count Number of clients connected to wireless access point
 # TYPE meraki_wireless_client_count gauge
@@ -1003,6 +1034,10 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 # HELP meraki_wireless_usage_received_bytes Wireless received usage in bytes
 # TYPE meraki_wireless_usage_received_bytes gauge
 # UNIT meraki_wireless_usage_received_bytes bytes
+=======
+# HELP meraki_wireless_client_count Number of clients connected to wireless access point
+# TYPE meraki_wireless_client_count gauge
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
 """
         if 'vpn' in COLLECT_EXTRA:
             response +="""
@@ -1078,12 +1113,20 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
                 response += 'meraki_device_using_cellular_failover' + target + '} ' + ('1' if host_stats[host]['usingCellularFailover'] else '0') + '\n'
             except KeyError:
                 pass
+<<<<<<< HEAD
             if 'wirelessClientCount' in host_stats[host]:
                 response += 'meraki_wireless_client_count' + target + '} ' + str(host_stats[host]['wirelessClientCount']) + '\n'
             if 'wirelessApCpuLoadPercent' in host_stats[host]:
                 response += 'meraki_wireless_ap_cpu_load' + target + '} ' + str(host_stats[host]['wirelessApCpuLoadPercent']) + '\n'
             if 'memoryUsedPercent' in host_stats[host]:
                 response += 'meraki_device_memory_used_percent' + target + '} ' + str(host_stats[host]['memoryUsedPercent']) + '\n'
+=======
+            try:
+                if 'wirelessClientCount' in host_stats[host]:
+                    response += 'meraki_wireless_client_count' + target + '} ' + str(host_stats[host]['wirelessClientCount']) + '\n'
+            except KeyError:
+                pass
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
             if 'uplinks' in host_stats[host]:
                 for uplink in host_stats[host]['uplinks'].keys():
                     response += 'meraki_device_uplink_status' + target + ',uplink="' + uplink + '"} ' + str(firewall_uplink_statuses[host_stats[host]['uplinks'][uplink]]) + '\n'
@@ -1106,6 +1149,7 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
                         # Get the floor_name from the AP device, not the switch
                         ap_floor_name = get_ap_floor_name(usage_data['ap_device_name'])
                         ap_target = '{name="' + _esc(usage_data['ap_device_name']) + '",office="' + _esc(network_name_label) + '",floor="' + _esc(ap_floor_name) + '",product_type="wireless"'
+<<<<<<< HEAD
                         if 'usage' in COLLECT_EXTRA:
                             if 'UsageTotalBytes' in usage_data:
                                 response += 'meraki_wireless_usage_total_bytes' + ap_target + '} ' + str(usage_data['UsageTotalBytes']*1024) + '\n'
@@ -1113,6 +1157,14 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
                                 response += 'meraki_wireless_usage_received_bytes' + ap_target + '} ' + str(usage_data['UsageUpstreamBytes']*1024) + '\n'
                             if 'UsageDownstreamBytes' in usage_data:
                                 response += 'meraki_wireless_usage_sent_bytes' + ap_target + '} ' + str(usage_data['UsageDownstreamBytes']*1024) + '\n'
+=======
+                        if 'UsageTotalBytes' in usage_data:
+                            response += 'meraki_wireless_usage_total_bytes' + ap_target + '} ' + str(usage_data['UsageTotalBytes']*1024) + '\n'
+                        if 'UsageUpstreamBytes' in usage_data:
+                            response += 'meraki_wireless_usage_received_bytes' + ap_target + '} ' + str(usage_data['UsageUpstreamBytes']*1024) + '\n'
+                        if 'UsageDownstreamBytes' in usage_data:
+                            response += 'meraki_wireless_usage_sent_bytes' + ap_target + '} ' + str(usage_data['UsageDownstreamBytes']*1024) + '\n'
+>>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
                         if 'bandwidthTotalKbps' in usage_data:
                             response += 'meraki_wireless_bandwidth_total_kbps' + ap_target + '} ' + str(usage_data['bandwidthTotalKbps']) + '\n'
                         if 'bandwidthUpstreamKbps' in usage_data:
