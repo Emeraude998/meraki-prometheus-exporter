@@ -417,6 +417,7 @@ def get_wireless_ap_clients(ap_clients_info, dashboard, organization_id):
     
     Args:
 <<<<<<< HEAD
+<<<<<<< HEAD
         ap_clients_info (dict[str, int]): List to append AP client count data to
         dashboard (meraki.DashboardAPI): Meraki API client instance
         organization_id (str): ID of the organization to fetch AP client counts for
@@ -429,6 +430,13 @@ def get_wireless_ap_clients(ap_clients_info, dashboard, organization_id):
     Returns:
         None: Modifies list in place
 >>>>>>> f01ff2a (Add wireless client count tracking and reporting for access points)
+=======
+        ap_clients_info (dict[str, int]): List to append AP client count data to
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization to fetch AP client counts for
+    Returns:
+        None: Modifies dict in place
+>>>>>>> 4113da5 (Refactor data type annotations in metrics functions and streamline response handling)
     """
     response = dashboard.wireless.getOrganizationWirelessClientsOverviewByDevice(
         organizationId=organization_id,
@@ -483,12 +491,17 @@ def cpu_load_calculator(core_count, load_value):
     """
     # Constants
 <<<<<<< HEAD
+<<<<<<< HEAD
     normalization_factor = 65536  # Normalization factor
     per_cpu_load_cap = 1.5    # Maximum per-CPU load cap
 =======
     re = 65536  # Normalization factor
     he = 1.5    # Maximum per-CPU load cap
 >>>>>>> 326f5a0 (Add CPU load metric for wireless access points and update README)
+=======
+    normalization_factor = 65536  # Normalization factor
+    per_cpu_load_cap = 1.5    # Maximum per-CPU load cap
+>>>>>>> 4113da5 (Refactor data type annotations in metrics functions and streamline response handling)
     
     # Check for invalid core count
     if core_count <= 0:
@@ -496,16 +509,22 @@ def cpu_load_calculator(core_count, load_value):
     
     # Calculate per-CPU load and normalize to percentage
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 4113da5 (Refactor data type annotations in metrics functions and streamline response handling)
     normalized_load = load_value / normalization_factor
     per_cpu_load = normalized_load / core_count
     clamped_value = min(per_cpu_load, per_cpu_load_cap)
     normalized_value = (clamped_value / per_cpu_load_cap)
+<<<<<<< HEAD
 =======
     v = load_value / re
     per_cpu_load = v / core_count
     clamped_value = min(per_cpu_load, he)
     normalized_value = (clamped_value / he)
 >>>>>>> 326f5a0 (Add CPU load metric for wireless access points and update README)
+=======
+>>>>>>> 4113da5 (Refactor data type annotations in metrics functions and streamline response handling)
     percentage = round(normalized_value * 100, 2)
     
     return percentage
@@ -555,19 +574,27 @@ def get_device_memory_usage(device_memory_usage, dashboard, organization_id):
     
     Args:
 <<<<<<< HEAD
+<<<<<<< HEAD
         device_memory_usage (dict[str, float]): List to append device memory usage data to
 =======
         device_memory_usage (dict[str, str]): List to append device memory usage data to
 >>>>>>> caacc4b (Add memory usage metric for Meraki devices and update README)
+=======
+        device_memory_usage (dict[str, float]): List to append device memory usage data to
+>>>>>>> 4113da5 (Refactor data type annotations in metrics functions and streamline response handling)
         dashboard (meraki.DashboardAPI): Meraki API client instance
         organization_id (str): ID of the organization to fetch device memory usage for
         
     Returns:
 <<<<<<< HEAD
+<<<<<<< HEAD
         None: Modifies dict in place
 =======
         None: Modifies list in place
 >>>>>>> caacc4b (Add memory usage metric for Meraki devices and update README)
+=======
+        None: Modifies dict in place
+>>>>>>> 4113da5 (Refactor data type annotations in metrics functions and streamline response handling)
     """
     timespan = 120 # 2 minutes in seconds
     
@@ -1332,12 +1359,16 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
             except KeyError:
                 pass
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 4113da5 (Refactor data type annotations in metrics functions and streamline response handling)
             if 'wirelessClientCount' in host_stats[host]:
                 response += 'meraki_wireless_client_count' + target + '} ' + str(host_stats[host]['wirelessClientCount']) + '\n'
             if 'wirelessApCpuLoadPercent' in host_stats[host]:
                 response += 'meraki_wireless_ap_cpu_load' + target + '} ' + str(host_stats[host]['wirelessApCpuLoadPercent']) + '\n'
             if 'memoryUsedPercent' in host_stats[host]:
                 response += 'meraki_device_memory_used_percent' + target + '} ' + str(host_stats[host]['memoryUsedPercent']) + '\n'
+<<<<<<< HEAD
 =======
             try:
                 if 'wirelessClientCount' in host_stats[host]:
@@ -1361,6 +1392,8 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
             except KeyError:
                 pass
 >>>>>>> caacc4b (Add memory usage metric for Meraki devices and update README)
+=======
+>>>>>>> 4113da5 (Refactor data type annotations in metrics functions and streamline response handling)
             if 'uplinks' in host_stats[host]:
                 for uplink in host_stats[host]['uplinks'].keys():
                     response += 'meraki_device_uplink_status' + target + ',uplink="' + uplink + '"} ' + str(firewall_uplink_statuses[host_stats[host]['uplinks'][uplink]]) + '\n'
