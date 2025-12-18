@@ -193,10 +193,10 @@ def get_switch_ports_usage(switch_ports_usage, dashboard, organization_id):
     Returns:
         None: Modifies list in place
     """
-    timespan = 7200  # 2 hours in seconds
+    timespan = 600  # 10 minutes in seconds
 
     print(f"Fetching switch port usage history for org {organization_id}...")
-    print(f"   Timespan: {timespan} seconds ({timespan/3600} hours)")
+    print(f"   Timespan: {timespan} seconds ({timespan/60} minutes)")
 
     try:
         response = dashboard.switch.getOrganizationSwitchPortsUsageHistoryByDeviceByInterval(
@@ -426,9 +426,9 @@ def get_wireless_ap_cpu_load_history(ap_cpu_loads, dashboard, organization_id):
         organization_id (str): ID of the organization to fetch AP CPU load for
         
     Returns:
-        None: Modifies list in place
+        None: Modifies dict in place
     """
-    timespan = 300 # 5 minutes in seconds
+    timespan = 600 # 10 minutes in seconds
         
     response = dashboard.wireless.getOrganizationWirelessDevicesSystemCpuLoadHistory(
         organizationId=organization_id,
@@ -464,7 +464,7 @@ def get_device_memory_usage(device_memory_usage, dashboard, organization_id):
     Returns:
         None: Modifies dict in place
     """
-    timespan = 120 # 2 minutes in seconds
+    timespan = 600 # 10 minutes in seconds
     
     response = dashboard.organizations.getOrganizationDevicesSystemMemoryUsageHistoryByInterval(
         organizationId=organization_id,
