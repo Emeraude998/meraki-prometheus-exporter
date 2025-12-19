@@ -193,7 +193,7 @@ def get_switch_ports_usage(switch_ports_usage, dashboard, organization_id):
     Returns:
         None: Modifies list in place
     """
-    timespan = 600  # 10 minutes in seconds
+    timespan = 1800  # 30 minutes in seconds
 
     print(f"Fetching switch port usage history for org {organization_id}...")
     print(f"   Timespan: {timespan} seconds ({timespan/60} minutes)")
