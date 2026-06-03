@@ -8,9 +8,10 @@ Not all devices exports all metrics.
 | --- | --- | --- |
 | meraki_device_latency | seconds | Device latency |
 | meraki_device_loss_percent | % | 0 - 100% |
-| meraki_device_status | int | 0 - Offline <br> 1 - Online |
+| meraki_device_status | | 0 - Offline <br> 0.5 - Alerting <br> 1 - Online |
+| meraki_device_uplink_status | int | 0 - Active <br> 1 - Ready <br> 2 - Connecting <br> 3 - Not connected <br> 4 - Failed |
+| meraki_device_ha_role | int | Meraki firewall device High-Availability role exposed as a label <br> primary or spare |
 | meraki_device_using_cellular_failover | int | 1 - using cellular <br> 0 - using main Uplink |
-| meraki_device_uplink_status | int | 'active': 0 <br> 'ready': 1 <br> 'connecting': 2 <br> 'not connected': 3 <br> 'failed': 4 |
 | meraki_vpn_mode | int | 1 - hub <br> 0 - spoke |
 | meraki_vpn_exported_subnets | int | Subnet exported by the VPN, 1 per subnet |
 | meraki_vpn_meraki_peers | int | 1 - reachable <br> 0 - unreachable |
@@ -44,6 +45,8 @@ All metrics but __request_processing_seconds__ have the following labels:
 | product_type | string | Product type (e.g., 'wireless', 'switch', 'appliance') |
 
 **meraki_device_uplink_status** also carries the "uplink" label containing the uplink name.
+
+**meraki_device_ha_role** also carries the "ha_role" label containing the high availability role.
 
 **meraki_switch_port_\*** metrics also carry the "portId" label containing the port ID. Note: Ports tagged with 'uplink' or connected to Meraki APs are exported.
 
