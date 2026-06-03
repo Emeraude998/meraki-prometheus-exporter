@@ -157,6 +157,7 @@ def get_devices_and_statuses(devices_and_statuses, dashboard, organization_id):
     """
     devices_and_statuses.extend(dashboard.organizations.getOrganizationDevicesAvailabilities(
         organizationId=organization_id,
+        statuses=['online', 'alerting', 'offline'],
         total_pages="all"))
     print('Got', len(devices_and_statuses), 'Devices')
 
@@ -988,6 +989,15 @@ def get_usage(dashboard, organization_id):
             device_metric_list[device['serial']]  # should give me KeyError if devices was not picked up by previous search.
         except KeyError:
             device_metric_list[device['serial']] = {"missing data": True}
+
+        # HA role comes from highAvailability.role in the uplink status payload.
+        high_availability = device.get('highAvailability', {})
+        ha_role = None
+        if isinstance(high_availability, dict):
+            ha_role = high_availability.get('role')
+        if ha_role:
+            device_metric_list[device['serial']]['haRole'] = ha_role
+
         device_metric_list[device['serial']]['uplinks'] = {}
         for uplink in device['uplinks']:
             device_metric_list[device['serial']]['uplinks'][uplink['interface']] = uplink['status']
@@ -1183,6 +1193,7 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
         print("Reporting on:", len(host_stats), "hosts\n")
 
         firewall_uplink_statuses = {'active': 0, 'ready': 1, 'connecting': 2, 'not connected': 3, 'failed': 4}
+        device_status_scores = {'online': 1, 'alerting': 0.5, 'offline': 0}
 
         response = """
 # HELP meraki_device_latency The latency of the Meraki device in milliseconds
@@ -1191,12 +1202,13 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 # HELP meraki_device_loss_percent The packet loss percentage of the Meraki device
 # TYPE meraki_device_loss_percent gauge
 # UNIT meraki_device_loss_percent percent
-# HELP meraki_device_status The status of the Meraki device (1 for online, 0 for offline)
+# HELP meraki_device_status Device status score (online=1, alerting=0.5, offline=0)
 # TYPE meraki_device_status gauge
-# UNIT meraki_device_status boolean
 # HELP meraki_device_uplink_status The status of the uplink of the Meraki device
 # TYPE meraki_device_uplink_status gauge
 # UNIT meraki_device_uplink_status status_code
+# HELP meraki_device_ha_role Meraki device HA role exposed as a label value
+# TYPE meraki_device_ha_role gauge
 # HELP meraki_device_using_cellular_failover Whether the Meraki device is using cellular failover (1 for true, 0 for false)
 # TYPE meraki_device_using_cellular_failover gauge
 # UNIT meraki_device_using_cellular_failover boolean
@@ -1321,7 +1333,9 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
             except KeyError:
                 pass
             try:
-                response += 'meraki_device_status' + target + '} ' + ('1' if host_stats[host]['status'] == 'online' else '0') + '\n'
+                status = host_stats[host]['status']
+                if status in device_status_scores:
+                    response += 'meraki_device_status' + target + '} ' + str(device_status_scores[status]) + '\n'
             except KeyError:
                 pass
             try:
@@ -1339,6 +1353,8 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
             if 'uplinks' in host_stats[host]:
                 for uplink in host_stats[host]['uplinks'].keys():
                     response += 'meraki_device_uplink_status' + target + ',uplink="' + uplink + '"} ' + str(firewall_uplink_statuses[host_stats[host]['uplinks'][uplink]]) + '\n'
+            if 'haRole' in host_stats[host]:
+                response += 'meraki_device_ha_role' + target + ',ha_role="' + _esc(host_stats[host]['haRole']) + '"} 1\n'
             if 'vpnMode' in host_stats[host]:
                 response += 'meraki_vpn_mode' + target + '} ' + ('1' if host_stats[host]['vpnMode'] == 'hub' else '0') + '\n'
             if 'exportedSubnets' in host_stats[host]:
