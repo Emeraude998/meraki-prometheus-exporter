@@ -989,6 +989,15 @@ def get_usage(dashboard, organization_id):
             device_metric_list[device['serial']]  # should give me KeyError if devices was not picked up by previous search.
         except KeyError:
             device_metric_list[device['serial']] = {"missing data": True}
+
+        # HA role comes from highAvailability.role in the uplink status payload.
+        high_availability = device.get('highAvailability', {})
+        ha_role = None
+        if isinstance(high_availability, dict):
+            ha_role = high_availability.get('role')
+        if ha_role:
+            device_metric_list[device['serial']]['haRole'] = ha_role
+
         device_metric_list[device['serial']]['uplinks'] = {}
         for uplink in device['uplinks']:
             device_metric_list[device['serial']]['uplinks'][uplink['interface']] = uplink['status']
@@ -1198,6 +1207,8 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 # HELP meraki_device_uplink_status The status of the uplink of the Meraki device
 # TYPE meraki_device_uplink_status gauge
 # UNIT meraki_device_uplink_status status_code
+# HELP meraki_device_ha_role Meraki device HA role exposed as a label value
+# TYPE meraki_device_ha_role gauge
 # HELP meraki_device_using_cellular_failover Whether the Meraki device is using cellular failover (1 for true, 0 for false)
 # TYPE meraki_device_using_cellular_failover gauge
 # UNIT meraki_device_using_cellular_failover boolean
@@ -1342,6 +1353,8 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
             if 'uplinks' in host_stats[host]:
                 for uplink in host_stats[host]['uplinks'].keys():
                     response += 'meraki_device_uplink_status' + target + ',uplink="' + uplink + '"} ' + str(firewall_uplink_statuses[host_stats[host]['uplinks'][uplink]]) + '\n'
+            if 'haRole' in host_stats[host]:
+                response += 'meraki_device_ha_role' + target + ',ha_role="' + _esc(host_stats[host]['haRole']) + '"} 1\n'
             if 'vpnMode' in host_stats[host]:
                 response += 'meraki_vpn_mode' + target + '} ' + ('1' if host_stats[host]['vpnMode'] == 'hub' else '0') + '\n'
             if 'exportedSubnets' in host_stats[host]:
