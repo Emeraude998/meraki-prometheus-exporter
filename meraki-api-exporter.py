@@ -349,6 +349,7 @@ def get_switch_ports_usage(switch_ports_usage, dashboard, organization_id):
         response = dashboard.switch.getOrganizationSwitchPortsUsageHistoryByDeviceByInterval(
             organizationId=organization_id,
             timespan=timespan,
+            perPage=50,
             total_pages="all"
         )
 
@@ -389,6 +390,7 @@ def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
     try:
         response = dashboard.switch.getOrganizationSwitchPortsStatusesBySwitch(
             organizationId=organization_id,
+            perPage=20,
             total_pages="all"
         )
 
@@ -473,6 +475,7 @@ def get_switch_ports_topology_discovery(port_discovery_map, dashboard, organizat
     """
     response = dashboard.switch.getOrganizationSwitchPortsTopologyDiscoveryByDevice(
         organizationId=organization_id,
+        perPage=20,
         total_pages="all"
     )
     
@@ -585,6 +588,7 @@ def get_wireless_ap_cpu_load_history(ap_cpu_loads, dashboard, organization_id):
     response = dashboard.wireless.getOrganizationWirelessDevicesSystemCpuLoadHistory(
         organizationId=organization_id,
         timespan=timespan,
+        perPage=20,
         total_pages="all"
     )
     
@@ -622,6 +626,7 @@ def get_device_memory_usage(device_memory_usage, dashboard, organization_id):
     response = dashboard.organizations.getOrganizationDevicesSystemMemoryUsageHistoryByInterval(
         organizationId=organization_id,
         timespan=timespan,
+        perPage=20,
         total_pages="all"
     )
     
