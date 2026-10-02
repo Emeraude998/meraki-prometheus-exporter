@@ -33,6 +33,11 @@ Not all devices exports all metrics.
 | meraki_wireless_ap_rf_health_score | int | RF health score for 5 GHz band (0-100, based on interference, noise, neighbors, etc.) |
 | meraki_device_memory_used_percent | percent | Memory used percentage of the Meraki device |
 | meraki_office_coordinates | int | Office coordinates (latitude and longitude) for network location mapping |
+| meraki_dhcp_leases_used | int | DHCP leases in use per MX subnet |
+| meraki_dhcp_leases_free | int | DHCP leases free per MX subnet (raw value, can be negative) |
+| meraki_dhcp_pool_size | int | DHCP pool size per MX subnet (used + free) |
+| meraki_dhcp_utilization_ratio | ratio | used / pool size per MX subnet (can exceed 1, 0 if pool size is not positive) |
+| meraki_dhcp_last_success_timestamp_seconds | seconds | Unix time of the last successful DHCP data refresh |
 | request_processing_seconds | sec | Total processing time for all hosts, exported once |
 
 ### Labels
@@ -49,6 +54,8 @@ All metrics but __request_processing_seconds__ have the following labels:
 **meraki_device_ha_role** also carries the "ha_role" label containing the high availability role.
 
 **meraki_switch_port_\*** metrics also carry the "portId" label containing the port ID. Note: Ports tagged with 'uplink' or connected to Meraki APs are exported.
+
+**meraki_dhcp_\*** metrics only carry the "name" (primary MX), "office" and "vlan" (VLAN name, or VLAN id if the network has no named VLANs) labels. `meraki_dhcp_last_success_timestamp_seconds` has no label. Only the primary of a warm spare pair is exported (spare appliances hold no lease data), and only DHCP served by the MX is covered. Data is cached, see [Caching](#caching).
 
 **meraki_office_coordinates** uses different labels: "office" (network name), "lat" (latitude), and "lon" (longitude).
 
@@ -95,6 +102,22 @@ scrape_configs:
         - /etc/prometheus/meraki-targets.yml
 ```
 Please check **/systemd** folder for systemd services and timers configuration files, if your system uses it.
+
+### Caching
+
+Data that rarely changes is cached in memory (per organization) to limit the number of Meraki API calls and the 429 rate limiting. The cache lifetime in seconds can be tuned with environment variables, `0` disables the cache of the given data. If a refresh fails, the previous data keeps being served.
+
+| environment variable | default | cached data |
+| --- | --- | --- |
+| MERAKI_CACHE_TTL_NETWORKS | 3600 (1h) | Network names |
+| MERAKI_CACHE_TTL_FLOOR_PLANS | 21600 (6h) | Floor names and office coordinates |
+| MERAKI_CACHE_TTL_PORT_TAGS | 3600 (1h) | Switch port tags |
+| MERAKI_CACHE_TTL_TOPOLOGY | 1800 (30m) | Switch port CDP/LLDP topology discovery |
+| MERAKI_CACHE_TTL_PORT_STATUSES | 600 (10m) | Switch port statuses |
+| MERAKI_CACHE_TTL_DHCP | 300 (5m) | DHCP leases usage of the MX |
+| MERAKI_CACHE_TTL_VLAN_NAMES | 86400 (24h) | VLAN names used by the DHCP metrics |
+
+Everything else is fetched on every scrape.
 
 ### Docker
 

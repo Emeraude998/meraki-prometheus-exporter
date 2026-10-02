@@ -1,10 +1,109 @@
+import copy
+import functools
 import http.server
+import os
 import threading
 import time
 
 import configargparse
 import meraki
 import requests
+
+
+_log_local = threading.local()
+
+
+def log(message):
+    """Print a message and record it, so that ttl_cache can replay it when it serves cached data.
+
+    Args:
+        message (str): Message to print
+    """
+    print(message)
+    messages = getattr(_log_local, 'messages', None)
+    if messages is not None:
+        messages.append(message)
+
+
+def format_age(seconds):
+    """Format an age in seconds in a short human readable form (45s, 7m, 2h05m).
+
+    Args:
+        seconds (float): Age in seconds
+
+    Returns:
+        str: Formatted age
+    """
+    seconds = int(seconds)
+    if seconds < 60:
+        return f'{seconds}s'
+    if seconds < 3600:
+        return f'{seconds // 60}m'
+    return f'{seconds // 3600}h{seconds % 3600 // 60:02d}m'
+
+
+def ttl_cache(name, default_ttl, containers=1):
+    """Cache the data collected by a get_* function for a configurable time.
+
+    The decorated function must take the container(s) to fill in place first, then 'dashboard' and
+    'organization_id' (plus any extra arguments). The cache is kept per organization, in memory.
+    The TTL in seconds can be tuned with the MERAKI_CACHE_TTL_<name> environment variable,
+    0 disables the cache. If a refresh fails, the previous data (if any) keeps being served.
+    The messages logged with log() during a refresh are replayed, suffixed with "(cached, <age> old)",
+    when the cached data is served.
+
+    A function that depends on another collected input (e.g. the networks map) must raise when that
+    input is empty or invalid: the cache only keeps the output, so a result built from bad input
+    would be served for the whole TTL.
+
+    Args:
+        name (str): Suffix of the MERAKI_CACHE_TTL_<name> environment variable
+        default_ttl (int): TTL in seconds when the environment variable is not set
+        containers (int): Number of leading arguments that are containers filled in place
+    """
+    ttl = int(os.environ.get(f'MERAKI_CACHE_TTL_{name}', default_ttl))
+
+    def decorator(func):
+        entries = {}  # {organization_id: {'time': float, 'data': list of containers, 'messages': list of str}}
+        locks = {}  # {organization_id: threading.Lock}
+
+        @functools.wraps(func)
+        def wrapper(*args):
+            if ttl <= 0:
+                return func(*args)
+
+            targets = args[:containers]
+            organization_id = args[containers + 1]
+            with locks.setdefault(organization_id, threading.Lock()):
+                entry = entries.get(organization_id)
+                if entry is None or time.monotonic() - entry['time'] >= ttl:
+                    outer_messages = getattr(_log_local, 'messages', None)
+                    _log_local.messages = messages = []
+                    try:
+                        func(*args)
+                    except Exception as e:
+                        if entry is None:
+                            raise
+                        print(f"{func.__name__} failed, serving cached data: {e}")
+                        for target in targets:
+                            target.clear()  # Drop what the failed refresh may have partially filled
+                    else:
+                        entries[organization_id] = {
+                            'time': time.monotonic(), 'data': copy.deepcopy(targets), 'messages': messages}
+                        return
+                    finally:
+                        _log_local.messages = outer_messages
+
+                for target, cached in zip(targets, copy.deepcopy(entry['data'])):
+                    if isinstance(target, dict):
+                        target.update(cached)
+                    else:
+                        target.extend(cached)
+                for message in entry['messages']:
+                    print(f"{message} (cached, {format_age(time.monotonic() - entry['time'])} old)")
+
+        return wrapper
+    return decorator
 
 
 class MerakiEarlyAccessAPI:
@@ -293,6 +392,124 @@ def get_vpn_statuses(vpn_statuses, dashboard, organization_id):
     print('Got', len(vpn_statuses), 'VPN Statuses')
 
 
+@ttl_cache('VLAN_NAMES', 86400)
+def get_network_vlan_names(vlan_names, dashboard, organization_id, networks):
+    """Fetch the VLAN names of every network.
+
+    Args:
+        vlan_names (dict[str, dict[str, str]]): Dict to update with VLAN names
+            Structure: {network_id: {vlan_id: vlan_name}}
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization to fetch VLAN names for
+        networks (dict[str, str]): Dict mapping network IDs to network names
+
+    Returns:
+        None: Modifies dict in place
+
+    Raises:
+        ValueError: If the networks dict is empty
+        RuntimeError: If the VLANs of a network could not be fetched
+    """
+    if not networks:
+        raise ValueError("networks dict is empty")
+
+    for network_id in networks:
+        try:
+            vlans = dashboard.appliance.getNetworkApplianceVlans(networkId=network_id)
+        except meraki.exceptions.APIError as e:
+            # 400 is returned when the network has no MX or VLANs are not enabled
+            if e.status != 400:
+                raise
+            vlans = []
+
+        # When retries are exhausted, the SDK can return the error body instead of raising
+        if not isinstance(vlans, list):
+            raise RuntimeError(f"Unexpected VLANs response for network {network_id}")
+        vlan_names[network_id] = {str(vlan.get('id')): vlan.get('name') for vlan in vlans}
+
+
+@ttl_cache('DHCP', 300)
+def get_appliance_dhcp_subnets(dhcp_data, dashboard, organization_id, networks):
+    """Fetch DHCP lease usage of the primary MX of every network.
+
+    Only the primary of a warm spare pair holds real lease data, so spare appliances are skipped.
+    If any appliance can not be fetched, the whole refresh fails so that the previous data keeps
+    being served and 'last_success' is not updated.
+
+    Args:
+        dhcp_data (dict): Dict to update with the DHCP data
+            Structure: {'last_success': float,
+                        'subnets': [{'name': str, 'office': str, 'vlan': str, 'used': int, 'free': int}]}
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization to fetch DHCP data for
+        networks (dict[str, str]): Dict mapping network IDs to network names
+
+    Returns:
+        None: Modifies dict in place
+
+    Raises:
+        ValueError: If the networks dict is empty
+        RuntimeError: If the DHCP subnets of an appliance could not be fetched
+    """
+    if not networks:
+        raise ValueError("networks dict is empty")
+
+    appliances = dashboard.organizations.getOrganizationDevices(
+        organizationId=organization_id,
+        productTypes=['appliance'],
+        total_pages="all")
+    # Same source as meraki_device_ha_role. Appliances without warm spare have no role.
+    spare_serials = {
+        status.get('serial')
+        for status in dashboard.appliance.getOrganizationApplianceUplinkStatuses(
+            organizationId=organization_id,
+            total_pages="all")
+        if (status.get('highAvailability') or {}).get('role') == 'spare'
+    }
+
+    vlan_names = {}
+    try:
+        get_network_vlan_names(vlan_names, dashboard, organization_id, networks)
+    except Exception as e:
+        # Fall back to VLAN ids, names are fetched again at the next refresh
+        print(f"Error fetching VLAN names: {e}")
+        vlan_names.clear()
+
+    subnets_data = []
+    failed_serials = []
+    for appliance in appliances:
+        serial = appliance.get('serial')
+        network_id = appliance.get('networkId')
+        if not serial or not network_id or serial in spare_serials:
+            continue
+
+        try:
+            subnets = dashboard.appliance.getDeviceApplianceDhcpSubnets(serial=serial)
+        except meraki.exceptions.APIError as e:
+            # 400 is returned when the MX has no DHCP to report (passthrough mode...)
+            if e.status != 400:
+                print(f"Error fetching DHCP subnets for {serial}: {e}")
+                failed_serials.append(serial)
+            continue
+
+        for subnet in subnets:
+            vlan_id = str(subnet.get('vlanId', ''))
+            subnets_data.append({
+                'name': appliance.get('name') or appliance.get('mac') or serial,
+                'office': networks.get(network_id) or network_id,
+                'vlan': vlan_names.get(network_id, {}).get(vlan_id) or vlan_id,
+                'used': subnet.get('usedCount', 0),
+                'free': subnet.get('freeCount', 0),
+            })
+
+    if failed_serials:
+        raise RuntimeError(f"DHCP subnets could not be fetched for {', '.join(failed_serials)}")
+
+    dhcp_data['subnets'] = subnets_data
+    dhcp_data['last_success'] = time.time()
+    log(f'Got {len(subnets_data)} DHCP subnets')
+
+
 def get_organization(org_data, dashboard, organization_id):
     """Fetch organization details.
     
@@ -305,6 +522,25 @@ def get_organization(org_data, dashboard, organization_id):
         None: Modifies dict in place
     """
     org_data.update(dashboard.organizations.getOrganization(organizationId=organization_id))
+
+
+@ttl_cache('NETWORKS', 3600)
+def get_organization_networks(networks_map, dashboard, organization_id):
+    """Fetch the networks of the organization.
+
+    Args:
+        networks_map (dict[str, str]): Dict to update with network names, mapped by network ID
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization to fetch networks for
+
+    Returns:
+        None: Modifies dict in place
+    """
+    networks = dashboard.organizations.getOrganizationNetworks(
+        organizationId=organization_id,
+        total_pages="all")
+    networks_map.update({n.get('id'): n.get('name') for n in networks})
+    log(f'Found {len(networks_map)} networks in the organization')
 
 
 def get_organizations(orgs_list, dashboard):
@@ -375,6 +611,7 @@ def get_switch_ports_usage(switch_ports_usage, dashboard, organization_id):
         print(f"Error fetching switch port usage: {e}")
         raise
 
+@ttl_cache('PORT_STATUSES', 600)
 def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
     """Fetch port status for all switches in the organization.
     
@@ -397,7 +634,7 @@ def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
         if isinstance(response, dict) and 'items' in response:
             # Process all devices - we'll filter ports later
             switches_statuses = response['items']
-            print(f"Found {len(switches_statuses)} switch devices")
+            log(f"Found {len(switches_statuses)} switch devices")
 
         # Build the port statuses map
         for switch in switches_statuses:
@@ -414,13 +651,14 @@ def get_switch_ports_status_map(port_statuses_map, dashboard, organization_id):
                 if status:
                     port_statuses_map[serial][port_id] = status
         
-        print('Found', sum(len(ports) for ports in port_statuses_map.values()), 'port statuses')
+        log(f'Found {sum(len(ports) for ports in port_statuses_map.values())} port statuses')
 
     except Exception as e:
         print(f"Error fetching switch ports statuses: {e}")
         raise
 
 
+@ttl_cache('PORT_TAGS', 3600)
 def get_switch_ports_tags_map(port_tags_map, dashboard, organization_id):
     """Fetch port configuration (including tags) for all switches in the organization.
     
@@ -459,9 +697,10 @@ def get_switch_ports_tags_map(port_tags_map, dashboard, organization_id):
             if tags:
                 port_tags_map[serial][port_id] = tags
     
-    print('Found', sum(len(ports) for ports in port_tags_map.values()), 'tagged ports')
+    log(f'Found {sum(len(ports) for ports in port_tags_map.values())} tagged ports')
 
 
+@ttl_cache('TOPOLOGY', 1800)
 def get_switch_ports_topology_discovery(port_discovery_map, dashboard, organization_id):
     """Fetch Meraki devices connected to switch ports using topology discovery data.
     
@@ -511,7 +750,7 @@ def get_switch_ports_topology_discovery(port_discovery_map, dashboard, organizat
                         'device_name': extract_device_name(lldp_parsed.get('system_name', 'N/A')),
                     }
     
-    print('Found', sum(len(ports) for ports in port_discovery_map.values()), 'switch ports connected to Meraki devices')
+    log(f'Found {sum(len(ports) for ports in port_discovery_map.values())} switch ports connected to Meraki devices')
 
 
 def get_wireless_ap_clients(ap_clients_info, dashboard, organization_id):
@@ -753,19 +992,26 @@ def get_network_enabled_ssids(network_ssids, dashboard, networks):
     print(f'Found {total_ssids} enabled SSIDs across {len(network_ssids)} networks')
 
 
-def get_offices_information(devices_floor_info, office_coordinates, dashboard, networks):
+@ttl_cache('FLOOR_PLANS', 21600, containers=2)
+def get_offices_information(devices_floor_info, office_coordinates, dashboard, organization_id, networks):
     """Extract offices information: Geographical coordinates, Floor names, Devices per floor.
     
     Args:
         devices_floor_info (dict[str, str]): The floor information dict
         office_coordinates (dict): The office coordinates dict
         dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization (used as cache key)
         networks (dict[str, str]): Dict mapping network IDs to network names
         
     Returns:
         None: Modifies dict in place
+
+    Raises:
+        ValueError: If the networks dict is empty
     """
-    
+    if not networks:
+        raise ValueError("networks dict is empty")
+
     floor_response = []
     # Fetch floor plans for each network
     for network_id in networks:
@@ -800,7 +1046,7 @@ def get_floor_name_per_device(devices_floor_info, floor_list):
             if serial:
                 devices_floor_info[serial] = floor_name
     
-    print('Found', len(devices_floor_info), 'devices associated to a floor name')
+    log(f'Found {len(devices_floor_info)} devices associated to a floor name')
 
 
 def get_office_coordinates(office_coordinates, floor_list):
@@ -828,7 +1074,7 @@ def get_office_coordinates(office_coordinates, floor_list):
             if coordinates:
                 office_coordinates[network_id] = coordinates
     
-    print('Found', len(office_coordinates), 'network office coordinates')
+    log(f'Found {len(office_coordinates)} network office coordinates')
 
 
 def extract_device_name(system_name):
@@ -861,15 +1107,11 @@ def get_usage(dashboard, organization_id):
 
     # Fetch networks for this organization so we can report network names instead of IDs
     # It will allow to pass this dict to collection tasks if needed
+    networks_map = {}
     try:
-        networks = dashboard.organizations.getOrganizationNetworks(
-            organizationId=organization_id,
-            total_pages="all")
-        networks_map = {n.get('id'): n.get('name') for n in networks}
-        print('Found', len(networks_map), 'networks in the organization')
-
+        get_organization_networks(networks_map, dashboard, organization_id)
     except Exception:
-        networks_map = {}
+        networks_map.clear()
 
     # Shared data containers for threaded collection
     devices_and_statuses = []
@@ -888,6 +1130,7 @@ def get_usage(dashboard, organization_id):
     device_memory_usage = {}
     ap_rf_health = {}
     network_ssids = {}
+    dhcp_data = {}
 
     # Define all data collection tasks
     threads = [
@@ -899,12 +1142,13 @@ def get_usage(dashboard, organization_id):
         threading.Thread(target=get_switch_ports_status_map, args=(port_statuses_map, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_tags_map, args=(port_tags_map, dashboard, organization_id)),
         threading.Thread(target=get_switch_ports_topology_discovery, args=(port_discovery_map, dashboard, organization_id)),
-        threading.Thread(target=get_offices_information, args=(devices_floor_info, office_coordinates, dashboard, networks_map)),
+        threading.Thread(target=get_offices_information, args=(devices_floor_info, office_coordinates, dashboard, organization_id, networks_map)),
         threading.Thread(target=get_wireless_ap_clients, args=(ap_clients_info, dashboard, organization_id)),
         threading.Thread(target=get_wireless_ap_cpu_load_history, args=(ap_cpu_loads, dashboard, organization_id)),
         threading.Thread(target=get_device_memory_usage, args=(device_memory_usage, dashboard, organization_id)),
         threading.Thread(target=get_network_enabled_ssids, args=(network_ssids, dashboard, networks_map)),
         threading.Thread(target=get_wireless_rf_health, args=(ap_rf_health, dashboard, organization_id, networks_map)),
+        threading.Thread(target=get_appliance_dhcp_subnets, args=(dhcp_data, dashboard, organization_id, networks_map)),
     ]
 
     # Add VPN collection thread if enabled
@@ -1095,7 +1339,7 @@ def get_usage(dashboard, organization_id):
         office_metric_list[office]['lon'] = coordinates['lng']
 
     print('Done')
-    return device_metric_list, office_metric_list
+    return device_metric_list, office_metric_list, dhcp_data
 # end of get_usage()
 
 
@@ -1194,7 +1438,7 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 
         start_time = time.monotonic()
 
-        host_stats, office_stats = get_usage(dashboard, organization_id)
+        host_stats, office_stats, dhcp_stats = get_usage(dashboard, organization_id)
         print("Reporting on:", len(host_stats), "hosts\n")
 
         firewall_uplink_statuses = {'active': 0, 'ready': 1, 'connecting': 2, 'not connected': 3, 'failed': 4}
@@ -1249,6 +1493,17 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 # UNIT meraki_device_memory_used_percent percent
 # HELP meraki_office_coordinates The office coordinates of the Meraki device's network
 # TYPE meraki_office_coordinates gauge
+# HELP meraki_dhcp_leases_used DHCP leases in use on the MX appliance subnet
+# TYPE meraki_dhcp_leases_used gauge
+# HELP meraki_dhcp_leases_free DHCP leases free on the MX appliance subnet (raw value, can be negative)
+# TYPE meraki_dhcp_leases_free gauge
+# HELP meraki_dhcp_pool_size DHCP pool size of the MX appliance subnet (used + free)
+# TYPE meraki_dhcp_pool_size gauge
+# HELP meraki_dhcp_utilization_ratio DHCP leases used divided by pool size (can exceed 1, 0 if pool size is not positive)
+# TYPE meraki_dhcp_utilization_ratio gauge
+# HELP meraki_dhcp_last_success_timestamp_seconds Unix time of the last successful DHCP data refresh
+# TYPE meraki_dhcp_last_success_timestamp_seconds gauge
+# UNIT meraki_dhcp_last_success_timestamp_seconds seconds
 """
         if 'usage' in COLLECT_EXTRA:
             response +="""
@@ -1412,6 +1667,20 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
             os = office_stats.get(office, {}) if isinstance(office_stats, dict) else {}
             office_target = '{office="' + _esc(os.get('officeName')) + '",lat="' + _esc(os.get('lat')) + '",lon="' + _esc(os.get('lon')) + '"'
             response += 'meraki_office_coordinates' + office_target + '} ' + '1' + '\n'
+
+        # DHCP metrics only cover the primary MX of each network (spare appliances hold no lease data)
+        for dhcp_subnet in dhcp_stats.get('subnets', []):
+            used = dhcp_subnet['used']
+            free = dhcp_subnet['free']
+            pool_size = used + free
+            dhcp_target = '{name="' + _esc(dhcp_subnet['name']) + '",office="' + _esc(dhcp_subnet['office']) + '",vlan="' + _esc(dhcp_subnet['vlan']) + '"'
+            response += 'meraki_dhcp_leases_used' + dhcp_target + '} ' + str(used) + '\n'
+            response += 'meraki_dhcp_leases_free' + dhcp_target + '} ' + str(free) + '\n'
+            response += 'meraki_dhcp_pool_size' + dhcp_target + '} ' + str(pool_size) + '\n'
+            response += 'meraki_dhcp_utilization_ratio' + dhcp_target + '} ' + str(used / pool_size if pool_size > 0 else 0) + '\n'
+
+        if dhcp_stats.get('last_success') is not None:
+            response += 'meraki_dhcp_last_success_timestamp_seconds ' + str(dhcp_stats['last_success']) + '\n'
 
         response += '# TYPE request_processing_seconds summary\n'
         response += 'request_processing_seconds ' + str(time.monotonic() - start_time) + '\n'
