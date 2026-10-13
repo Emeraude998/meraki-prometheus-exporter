@@ -4,6 +4,9 @@ import http.server
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from urllib.parse import parse_qs, urlparse
 
 import configargparse
 import meraki
@@ -508,6 +511,128 @@ def get_appliance_dhcp_subnets(dhcp_data, dashboard, organization_id, networks):
     dhcp_data['subnets'] = subnets_data
     dhcp_data['last_success'] = time.time()
     log(f'Got {len(subnets_data)} DHCP subnets')
+
+
+@ttl_cache('APPLIANCES', 3600)
+def get_organization_appliances(appliances, dashboard, organization_id):
+    """Fetch the appliances (MX) of the organization.
+
+    Args:
+        appliances (dict[str, dict]): Dict to update with the appliance names, mapped by serial
+            Structure: {serial: {'name': str}}
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization to fetch appliances for
+
+    Returns:
+        None: Modifies dict in place
+    """
+    for appliance in dashboard.organizations.getOrganizationDevices(
+            organizationId=organization_id,
+            productTypes=['appliance'],
+            total_pages="all"):
+        serial = appliance.get('serial')
+        if serial:
+            appliances[serial] = {'name': appliance.get('name') or appliance.get('mac') or serial}
+    log(f'Found {len(appliances)} appliances in the organization')
+
+
+def get_network_wan_bandwidth(dashboard, network_id):
+    """Fetch the bandwidth of the WAN uplinks of a network during its latest complete minute.
+
+    Args:
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        network_id (str): ID of the network to fetch the WAN usage for
+
+    Returns:
+        dict[str, dict[str, float]]: Bandwidth in kbps per uplink interface
+            Structure: {interface: {'upstream': float, 'downstream': float}}, empty if the API returned no data
+    """
+    # The buckets returned by the API never change once they are published, so the last one is complete
+    history = dashboard.appliance.getNetworkApplianceUplinksUsageHistory(
+        networkId=network_id,
+        timespan=300,
+        resolution=60)
+    if not history:
+        return {}
+
+    bucket = history[-1]
+    start = datetime.fromisoformat(bucket['startTime'].replace('Z', '+00:00'))
+    end = datetime.fromisoformat(bucket['endTime'].replace('Z', '+00:00'))
+    seconds = (end - start).total_seconds()
+    if seconds <= 0:
+        return {}
+
+    return {
+        uplink['interface']: {
+            'upstream': round(uplink.get('sent', 0) * 8 / 1000 / seconds, 1),
+            'downstream': round(uplink.get('received', 0) * 8 / 1000 / seconds, 1),
+        }
+        for uplink in bucket.get('byInterface', [])
+    }
+
+
+def get_wan_bandwidth(dashboard, organization_id):
+    """Collect the WAN bandwidth of the primary MX of every network.
+
+    The primary is looked up on every call (the role is the one of meraki_device_ha_role), so that the
+    'name' follows the active appliance after a warm spare failover. The network list, appliance names
+    and floor names come from the caches of the main collection.
+
+    Args:
+        dashboard (meraki.DashboardAPI): Meraki API client instance
+        organization_id (str): ID of the organization to collect data for
+
+    Returns:
+        list[dict]: One entry per network and WAN interface
+            Structure: {'name': str, 'office': str, 'floor': str|None, 'interface': str,
+                        'upstream': float, 'downstream': float}
+    """
+    networks_map = {}
+    get_organization_networks(networks_map, dashboard, organization_id)
+    appliances = {}
+    get_organization_appliances(appliances, dashboard, organization_id)
+
+    devices_floor_info = {}
+    try:
+        get_offices_information(devices_floor_info, {}, dashboard, organization_id, networks_map)
+    except Exception as e:
+        print(f"Error fetching floor names: {e}")
+        devices_floor_info.clear()
+
+    # One entry per network: its primary MX (appliances without warm spare have no role)
+    primaries = {}
+    for status in dashboard.appliance.getOrganizationApplianceUplinkStatuses(
+            organizationId=organization_id,
+            total_pages="all"):
+        network_id = status.get('networkId')
+        serial = status.get('serial')
+        if not network_id or not serial or (status.get('highAvailability') or {}).get('role') == 'spare':
+            continue
+        primaries[network_id] = serial
+
+    def fetch(network_id):
+        try:
+            return network_id, get_network_wan_bandwidth(dashboard, network_id)
+        except meraki.exceptions.APIError as e:
+            print(f"Error fetching WAN usage for network {network_id}: {e}")
+            return network_id, {}
+
+    wan_bandwidth = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for network_id, interfaces in executor.map(fetch, primaries):
+            serial = primaries[network_id]
+            for interface, bandwidth in interfaces.items():
+                wan_bandwidth.append({
+                    'name': appliances.get(serial, {}).get('name') or serial,
+                    'office': networks_map.get(network_id) or network_id,
+                    'floor': devices_floor_info.get(serial),
+                    'interface': interface,
+                    'upstream': bandwidth['upstream'],
+                    'downstream': bandwidth['downstream'],
+                })
+
+    print(f"Got the WAN bandwidth of {len(wan_bandwidth)} uplinks")
+    return wan_bandwidth
 
 
 def get_organization(org_data, dashboard, organization_id):
@@ -1343,6 +1468,23 @@ def get_usage(dashboard, organization_id):
 # end of get_usage()
 
 
+def _esc(val):
+    """Escape a value for use in Prometheus label values.
+
+    Args:
+        val (Any): Value to escape. May be None or any type convertible to string.
+
+    Returns:
+        str: Escaped string suitable for Prometheus label values.
+    """
+    if val is None:
+        return 'None'
+    s = str(val)
+    s = s.replace('\\', '\\\\')
+    s = s.replace('"', '\\"')
+    return s
+
+
 class MyHandler(http.server.BaseHTTPRequestHandler):
     def _set_headers(self):
         self.send_response(200)
@@ -1353,6 +1495,37 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(404)
         self.send_header('Content-type', 'text/plain; charset=utf-8')
         self.end_headers()
+
+    def _handle_wan(self):
+        """Serve the WAN bandwidth metrics of the primary MX of every network of an organization."""
+        organization_id = parse_qs(urlparse(self.path).query).get('target', [''])[0]
+        if not organization_id:
+            self._set_headers_404()
+            return
+
+        self._set_headers()
+        dashboard = meraki.DashboardAPI(API_KEY, output_log=False, print_console=False, maximum_retries=20, caller="promethusExporter Emeraude998")
+        print('WAN target: ', organization_id)
+        start_time = time.monotonic()
+
+        wan_bandwidth = get_wan_bandwidth(dashboard, organization_id)
+
+        response = """
+# HELP meraki_wan_bandwidth_upstream_kbps Upstream bandwidth usage of the MX WAN uplink in kbps (latest complete minute)
+# TYPE meraki_wan_bandwidth_upstream_kbps gauge
+# UNIT meraki_wan_bandwidth_upstream_kbps kbps
+# HELP meraki_wan_bandwidth_downstream_kbps Downstream bandwidth usage of the MX WAN uplink in kbps (latest complete minute)
+# TYPE meraki_wan_bandwidth_downstream_kbps gauge
+# UNIT meraki_wan_bandwidth_downstream_kbps kbps
+"""
+        for wan in wan_bandwidth:
+            target = '{name="' + _esc(wan['name']) + '",office="' + _esc(wan['office']) + '",floor="' + _esc(wan['floor']) + '",product_type="appliance",portId="' + _esc(wan['interface']) + '"'
+            response += 'meraki_wan_bandwidth_upstream_kbps' + target + '} ' + str(wan['upstream']) + '\n'
+            response += 'meraki_wan_bandwidth_downstream_kbps' + target + '} ' + str(wan['downstream']) + '\n'
+
+        response += '# TYPE request_processing_seconds summary\n'
+        response += 'request_processing_seconds ' + str(time.monotonic() - start_time) + '\n'
+        self.wfile.write(response.encode('utf-8'))
 
     def do_GET(self):
         # Root HTML page listing organizations with links
@@ -1416,6 +1589,11 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 
             self.wfile.write("\n".join(html).encode('utf-8'))
             return()
+
+        # WAN bandwidth only, meant to be scraped more often than the main target
+        if urlparse(self.path).path == "/wan":
+            self._handle_wan()
+            return
 
         if "/?target=" not in self.path and "/organizations" not in self.path and self.path != "/":
             self._set_headers_404()
@@ -1541,23 +1719,6 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 # TYPE meraki_vpn_third_party_peers gauge
 # UNIT meraki_vpn_third_party_peers count
 """
-        # helper to escape label values for Prometheus exposition format
-        def _esc(val):
-            """Escape a value for use in Prometheus label values.
-
-            Args:
-                val (Any): Value to escape. May be None or any type convertible to string.
-
-            Returns:
-                str: Escaped string suitable for Prometheus label values.
-            """
-            if val is None:
-                return 'None'
-            s = str(val)
-            s = s.replace('\\', '\\\\')
-            s = s.replace('"', '\\"')
-            return s
-
         # Helper to find floor_name for an AP by its name
         def get_ap_floor_name(ap_device_name):
             """Find the floor_name for an AP device by searching host_stats.

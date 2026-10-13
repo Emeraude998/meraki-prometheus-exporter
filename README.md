@@ -22,6 +22,8 @@ Not all devices exports all metrics.
 | meraki_switch_port_bandwidth_total_kbps | kbps | Total bandwidth usage on switch port (uplink ports and AP-connected ports) |
 | meraki_switch_port_bandwidth_upstream_kbps | kbps | Upstream bandwidth usage on switch port (uplink ports and AP-connected ports) |
 | meraki_switch_port_bandwidth_downstream_kbps | kbps | Downstream bandwidth usage on switch port (uplink ports and AP-connected ports) |connected ports) |
+| meraki_wan_bandwidth_upstream_kbps | kbps | Upstream bandwidth of the MX WAN uplinks (latest complete minute, served by `/wan`) |
+| meraki_wan_bandwidth_downstream_kbps | kbps | Downstream bandwidth of the MX WAN uplinks (latest complete minute, served by `/wan`) |
 | meraki_wireless_usage_total_bytes | bytes | Total wireless data usage per AP |
 | meraki_wireless_usage_sent_bytes | bytes | Wireless sent data usage per AP |
 | meraki_wireless_usage_received_bytes | bytes | Wireless received data usage per AP |
@@ -55,6 +57,8 @@ All metrics but __request_processing_seconds__ have the following labels:
 
 **meraki_switch_port_\*** metrics also carry the "portId" label containing the port ID. Note: Ports tagged with 'uplink' or connected to Meraki APs are exported.
 
+**meraki_wan_\*** metrics are only served by the `/wan` endpoint, see [WAN bandwidth](#wan-bandwidth). They carry the same labels as the other device metrics plus "portId" (`wan1`, `wan2`...). The "name" label is the primary MX of the network, it follows the active appliance after a warm spare failover.
+
 **meraki_dhcp_\*** metrics only carry the "name" (primary MX), "office" and "vlan" (VLAN name, or VLAN id if the network has no named VLANs) labels. `meraki_dhcp_last_success_timestamp_seconds` has no label. Only the primary of a warm spare pair is exported (spare appliances hold no lease data), and only DHCP served by the MX is covered. Data is cached, see [Caching](#caching).
 
 **meraki_office_coordinates** uses different labels: "office" (network name), "lat" (latitude), and "lon" (longitude).
@@ -72,7 +76,6 @@ All metrics but __request_processing_seconds__ have the following labels:
 pip install -r requirements.txt
 ```
 You need to provide API Key from meraki portal as argument when starting exporter.<br>
-**DO NOT USE KEYS WITH FULL ADMIN PRIVILEGES**<br>
 Exporter is listening on port 9822 on all interfaces by default
 
 ```
@@ -103,6 +106,22 @@ scrape_configs:
 ```
 Please check **/systemd** folder for systemd services and timers configuration files, if your system uses it.
 
+### WAN bandwidth
+
+The WAN bandwidth comes from the uplink usage history of the MX (`getNetworkApplianceUplinksUsageHistory`, 60 seconds resolution). Each metric is the average over the latest complete minute.
+
+GET request for **/wan?target=\<Organization Id\>** returns only these metrics. It can be scraped more often than the main target, for example every 30 seconds, as it only uses cached network, appliance and floor data:
+
+```
+  - job_name: 'Meraki WAN'
+    scrape_interval: 30s
+    scrape_timeout: 20s
+    metrics_path: /wan
+    file_sd_configs:
+      - files:
+        - /etc/prometheus/meraki-targets.yml
+```
+
 ### Caching
 
 Data that rarely changes is cached in memory (per organization) to limit the number of Meraki API calls and the 429 rate limiting. The cache lifetime in seconds can be tuned with environment variables, `0` disables the cache of the given data. If a refresh fails, the previous data keeps being served.
@@ -111,6 +130,7 @@ Data that rarely changes is cached in memory (per organization) to limit the num
 | --- | --- | --- |
 | MERAKI_CACHE_TTL_NETWORKS | 3600 (1h) | Network names |
 | MERAKI_CACHE_TTL_FLOOR_PLANS | 21600 (6h) | Floor names and office coordinates |
+| MERAKI_CACHE_TTL_APPLIANCES | 3600 (1h) | Appliance names used by the WAN bandwidth metrics |
 | MERAKI_CACHE_TTL_PORT_TAGS | 3600 (1h) | Switch port tags |
 | MERAKI_CACHE_TTL_TOPOLOGY | 1800 (30m) | Switch port CDP/LLDP topology discovery |
 | MERAKI_CACHE_TTL_PORT_STATUSES | 600 (10m) | Switch port statuses |

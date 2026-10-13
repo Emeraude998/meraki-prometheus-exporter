@@ -1,5 +1,6 @@
 local/*
 venv/*
+__pycache__
 
 # Environment / secrets — NEVER commit these
 .env
