@@ -1140,7 +1140,11 @@ def get_offices_information(devices_floor_info, office_coordinates, dashboard, o
     floor_response = []
     # Fetch floor plans for each network
     for network_id in networks:
-        floor_response.extend(dashboard.networks.getNetworkFloorPlans(networkId=network_id))
+        network_floors = dashboard.networks.getNetworkFloorPlans(networkId=network_id)
+        # Floor plans don't carry their network ID: tag them so coordinates don't depend on placed devices
+        for floor in network_floors:
+            floor['networkId'] = network_id
+        floor_response.extend(network_floors)
         
     if isinstance(floor_response, dict) and 'items' in floor_response:
         floor_list = floor_response['items']
@@ -1185,15 +1189,9 @@ def get_office_coordinates(office_coordinates, floor_list):
         None: Modifies dict in place
     """
     for floor in floor_list:
-        devices = floor.get('devices', [])
+        network_id = floor.get('networkId')
 
-        # Skip floors with no devices (can't determine network_id)
-        if not devices:
-            continue
-            
-        network_id = devices[0].get('networkId')
-        
-        # Only store coordinates for the FIRST floor of each network
+        # Only store coordinates for the FIRST geolocated floor of each network
         if network_id and network_id not in office_coordinates:
             coordinates = floor.get('center', {})
             if coordinates:
